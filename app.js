@@ -1,10 +1,16 @@
+const API_URL = "https://restless-lake-15cc.a-singhhemant2006.workers.dev/";
+
 const messages = document.getElementById("messages");
 const form = document.getElementById("chatForm");
 const input = document.getElementById("promptInput");
 const micButton = document.getElementById("micButton");
 const voiceState = document.getElementById("voiceState");
+const clearButton = document.getElementById("clearButton");
 
-// Load Android/browser voices
+// Conversation memory for this open session
+let chatHistory = [];
+
+// Browser voice setup
 let availableVoices = [];
 
 function loadVoices() {
@@ -18,7 +24,7 @@ if ("speechSynthesis" in window) {
   window.speechSynthesis.onvoiceschanged = loadVoices;
 }
 
-// JARVIS speech output
+// JARVIS voice output
 function speak(text) {
   if (!("speechSynthesis" in window)) {
     voiceState.textContent = "SPEECH NOT SUPPORTED";
@@ -55,9 +61,11 @@ function speak(text) {
   window.speechSynthesis.speak(utterance);
 }
 
-// Add a direct voice test button
+// Direct voice test button
 const testButton = document.createElement("button");
+testButton.type = "button";
 testButton.textContent = "🔊 Test JARVIS Voice";
+
 testButton.style.cssText =
   "display:block;margin:12px auto;padding:12px 20px;border-radius:12px;border:1px solid #64d9ff;background:#102b40;color:white;cursor:pointer;";
 
@@ -67,7 +75,7 @@ testButton.addEventListener("click", () => {
   speak("Hello. JARVIS voice system is working. How can I help you?");
 });
 
-// Chat messages
+// Display chat messages
 function addMessage(role, text) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
@@ -84,21 +92,43 @@ function addMessage(role, text) {
   messages.scrollTop = messages.scrollHeight;
 }
 
-function getReply(text) {
-  const q = text.toLowerCase();
+// Send message to Gemini through Cloudflare
+async function askJARVIS(text) {
+  const conversation = [
+    ...chatHistory,
+    { role: "user", content: text }
+  ].slice(-20);
 
-  if (q.includes("who are you")) {
-    return "I am JARVIS, your personal AI assistant.";
+  const response = await fetch(API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      messages: conversation
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || `Server error: ${response.status}`);
   }
 
-  if (q.includes("hello") || q.includes("hi")) {
-    return "Hello! I am ready to assist you.";
+  if (!data.reply) {
+    throw new Error("JARVIS received an empty response.");
   }
 
-  return "I received your message. My advanced AI brain is not connected yet.";
+  chatHistory = [
+    ...conversation,
+    { role: "assistant", content: data.reply }
+  ].slice(-20);
+
+  return data.reply;
 }
 
-form.addEventListener("submit", event => {
+// Chat submission
+form.addEventListener("submit", async event => {
   event.preventDefault();
 
   const text = input.value.trim();
@@ -106,28 +136,52 @@ form.addEventListener("submit", event => {
 
   addMessage("user", text);
   input.value = "";
+  input.disabled = true;
 
-  const answer = getReply(text);
+  voiceState.textContent = "JARVIS IS THINKING...";
 
-  addMessage("assistant", answer);
-  speak(answer);
+  try {
+    const answer = await askJARVIS(text);
+
+    addMessage("assistant", answer);
+    speak(answer);
+
+  } catch (error) {
+    console.error("JARVIS error:", error);
+
+    const message = "I couldn't connect to my AI brain. " + error.message;
+    addMessage("assistant", message);
+    voiceState.textContent = "CONNECTION ERROR";
+
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
 });
 
-document.getElementById("clearButton").addEventListener("click", () => {
-  window.speechSynthesis?.cancel();
+// Clear conversation
+clearButton.addEventListener("click", () => {
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  chatHistory = [];
   messages.replaceChildren();
-  addMessage("assistant", "Conversation cleared.");
+
+  addMessage("assistant", "Conversation cleared. I'm ready.");
   voiceState.textContent = "READY WHEN YOU ARE";
 });
 
-// Voice recognition
+// Microphone recognition
 const SpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (SpeechRecognition) {
   const recognition = new SpeechRecognition();
+
   recognition.lang = "en-IN";
   recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
 
   recognition.onstart = () => {
     voiceState.textContent = "LISTENING...";
@@ -155,6 +209,7 @@ if (SpeechRecognition) {
       voiceState.textContent = "TRY AGAIN";
     }
   });
+
 } else {
   micButton.addEventListener("click", () => {
     voiceState.textContent = "MIC NOT SUPPORTED";
